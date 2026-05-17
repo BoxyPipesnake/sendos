@@ -54,3 +54,36 @@ sendos-skill-recommender/
 - Priority: integration tests for all 4 endpoints
 - Target: coverage >60%
 - Location: backend/tests/
+
+## Git flow
+Strategy: GitHub Flow — `main` is always deployable, all work happens in short-lived branches.
+
+### Branch naming
+| Prefix | Use for |
+|---|---|
+| `feature/` | New functionality (endpoints, UI pages, AI logic) |
+| `fix/` | Bug fixes |
+| `chore/` | Deps, config, tests, infra |
+| `docs/` | Documentation only |
+
+Examples: `feature/profile-endpoint`, `fix/ai-analyzer-timeout`, `chore/add-integration-tests`
+
+### Commit messages (Conventional Commits)
+Format: `<type>: <short description>`
+
+| Type | Use for |
+|---|---|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `chore` | Maintenance, deps, config |
+| `test` | Adding or fixing tests |
+| `docs` | Documentation only |
+| `refactor` | Code change with no behavior change |
+
+Examples: `feat: add profile creation endpoint`, `fix: handle missing skills field in analyzer`
+
+### Rules
+- Always branch off `main`
+- Open a PR to merge back into `main`
+- Delete the branch after merging
+- Never commit directly to `main`
