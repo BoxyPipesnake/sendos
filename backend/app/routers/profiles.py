@@ -4,47 +4,18 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 
 from app.schemas import (
-    Analysis,
     AnalyzeResponse,
-    DetectedSkill,
     ProfileCreate,
     ProfileCreateResponse,
     ProfileResponse,
-    Recommendation,
-    RecommendationStep,
 )
+from app.services import ai_analyzer
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
 # Temporary in-memory store — replaced by DB session in Phase 3
 profiles_db: dict[str, dict] = {}
 
-
-def _mock_analyze() -> tuple[Analysis, list[Recommendation]]:
-    """Returns hardcoded analysis results. Replaced by ai_analyzer in Phase 2."""
-    analysis = Analysis(
-        detected_skills=[
-            DetectedSkill(name="Python", level="advanced", confidence=0.9),
-            DetectedSkill(name="FastAPI", level="intermediate", confidence=0.8),
-        ],
-        interests=["Machine Learning", "AI", "Backend Development"],
-        analyzed_at=datetime.now(timezone.utc),
-    )
-    recommendations = [
-        Recommendation(
-            title="ML Engineer Path",
-            description="Leverage your Python expertise to transition into ML",
-            duration_months=6,
-            steps=[
-                RecommendationStep(
-                    title="Foundation in ML",
-                    skills_to_develop=["scikit-learn", "pandas"],
-                    duration_weeks=8,
-                )
-            ],
-        )
-    ]
-    return analysis, recommendations
 
 
 @router.post("", response_model=ProfileCreateResponse, status_code=201)
@@ -78,15 +49,31 @@ def analyze_profile(profile_id: str) -> AnalyzeResponse:
     profile = profiles_db[profile_id]
     profile["status"] = "analyzing"
 
-    analysis, recommendations = _mock_analyze()
+    profile_input = ProfileCreate(
+        name=profile["name"],
+        current_role=profile["current_role"],
+        years_experience=profile["years_experience"],
+        bio=profile["bio"],
+        skills=profile["skills"],
+    )
+
+    try:
+        analysis, recommendations = ai_analyzer.analyze_profile(profile_input)
+    except Exception as exc:
+        # Reset status so the client can retry. Surface a 500 with the cause.
+        profile["status"] = "pending_analysis"
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI analysis failed: {exc}",
+        ) from exc
 
     profile["analysis"] = analysis
     profile["recommendations"] = recommendations
     profile["status"] = "completed"
 
     return AnalyzeResponse(
-        status="processing",
-        message=f"Analysis started. Check /api/profiles/{profile_id} for results",
+        status="completed",
+        message=f"Analysis complete. Fetch /api/profiles/{profile_id} for results",
     )
 
 
