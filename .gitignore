@@ -16,6 +16,12 @@ ENV/
 .env.local
 .env.*.local
 
+# MCP secrets — real config with API keys (template .example is committed)
+.mcp.json
+
+# Claude Code per-developer local state
+.claude/settings.local.json
+
 # Distribution / packaging
 build/
 dist/
