@@ -143,3 +143,85 @@ The structured-output path eliminates all of those failure modes at the protocol
 ### Evolution plan
 - If the project moves to a richer output (e.g., per-step reasoning traces, optional follow-up questions), the wrapper schemas can grow additional fields without touching the surrounding pipeline.
 - If the structured-output mechanism ever bottlenecks, we could move to direct Anthropic SDK calls with JSON Schema tool use, at the cost of a few more lines per step. The shape of the function (build prompt → call model → return typed object) would not change.
+
+---
+
+## Decision: JSONB columns for analysis and recommendations, not normalized tables
+
+### Chosen option
+Store `Analysis` and `list[Recommendation]` as JSONB columns directly on the `profiles` row in `backend/app/models.py`. No `analyses`, `recommendations`, or `recommendation_steps` tables exist. Pydantic models serialize to JSONB via `model_dump(mode="json")` on write and deserialize back through Pydantic validation on read.
+
+### Justification
+The analysis and recommendation structures are nested data we never query *inside*. No MVP endpoint or planned use case filters profiles by detected skill, joins on a recommendation step, or aggregates duration across profiles. They are read back whole and returned through the API whole.
+
+Normalizing across four tables (`profiles`, `analyses`, `recommendations`, `recommendation_steps`) for data we never query would buy us nothing and cost us four table definitions, three foreign keys, cascade behavior, joins on every read, and migrations every time the AI output shape changes.
+
+### Accepted trade-offs
+- Cannot run plain SQL queries on the contents (`WHERE detected_skill = 'Python'` requires JSONB operators).
+- Schema enforcement is at the Pydantic boundary, not in the DB. A bad row inserted by something other than our application code wouldn't be caught at write time.
+
+### Mitigations
+- Postgres JSONB is fully indexable. If a query pattern emerges, a partial GIN index on `analysis->'detected_skills'` adds query capability without rebuilding the schema.
+- All writes go through SQLAlchemy code that uses `model_dump(mode="json")` from Pydantic-validated objects. Bad rows are structurally impossible through the application.
+
+### Evolution plan
+- If query patterns demand normalization, materialize JSONB into normalized tables behind a view, or migrate fully. The router's Pydantic-construction call sites would be the only application-side change.
+
+---
+
+## Decision: Defer Alembic, use `Base.metadata.create_all()` on startup
+
+### Chosen option
+At app startup (inside a FastAPI `lifespan` context manager in `backend/app/main.py`) call `Base.metadata.create_all(bind=engine)` to create any missing tables. No Alembic, no migration scripts, no `alembic.ini`.
+
+### Justification
+Alembic earns its keep when a schema evolves across multiple deployed environments — generating versioned revisions, applying them in order, supporting rollback. For an MVP with one developer, one local database, and a schema that is unlikely to change before Phase 4 (tests), Alembic is overhead that produces no value yet.
+
+`create_all()` is idempotent: it issues `CREATE TABLE IF NOT EXISTS` for each model registered on `Base.metadata`. On every uvicorn boot, missing tables are created and existing tables are left alone.
+
+### Accepted trade-offs
+- Column type changes after data exists require manual intervention. `create_all()` will not modify an existing table.
+- No versioned migration history. Schema evolution would have to be reconstructed from `git log` rather than read from migration files.
+
+### Mitigations
+- The schema is small (one `profiles` table) and the project is in MVP scope. Column type changes are unlikely before Phase 4 ends.
+- The original Phase 1 ADR named Alembic as the Phase 3 destination; the Phase 3 plan re-evaluated and chose to defer. The deferral is itself documented (here).
+
+### Evolution plan
+- Adding Alembic later is straightforward: install, `alembic init`, autogenerate the initial revision against the live schema, commit. No application code changes.
+
+---
+
+## Decision: Two-transaction pattern around the AI call in the analyze endpoint
+
+### Chosen option
+In `backend/app/routers/profiles.py:analyze_profile`, commit `status="analyzing"` to the database *before* invoking `ai_analyzer.analyze_profile()`. Run the (~15-25 second) LLM pipeline with no transaction open. Then commit `status="completed"` plus the analysis and recommendations as JSONB. On exception, commit `status="pending_analysis"` as the rollback path.
+
+### Justification
+The naive port from the Phase 1 dict version would wrap the LLM call inside a single open transaction:
+
+```python
+profile.status = "analyzing"
+analysis, recs = ai_analyzer.analyze_profile(...)  # 15-25 seconds
+profile.analysis = ...
+db.commit()
+```
+
+This holds a row lock for the full duration of the AI call and never makes the `analyzing` state observable from other sessions — the state is only written when the surrounding transaction commits, by which point status is already `completed`.
+
+Splitting into two transactions:
+1. Releases the row lock immediately after marking it `analyzing`, so concurrent reads can see the in-progress state.
+2. Keeps the connection idle (transaction-wise) during the long LLM round trip rather than holding an open write transaction across slow I/O.
+3. Builds the right habit for a multi-user future even though the MVP is single-user.
+
+### Accepted trade-offs
+- Two commits instead of one. If the process crashes between the first commit and the AI call's return, the row is left in `analyzing` state — no automatic rollback.
+- The status field is the only signal of "in progress." There's no timestamp on when `analyzing` started, so a stuck row is hard to identify automatically.
+
+### Mitigations
+- On any exception during the LLM call, the `except` block commits `status="pending_analysis"` so the client can retry. Only a hard process crash leaves an `analyzing` row.
+- The status-flow contract from Phase 2 already accepted this theoretical trade-off; Phase 3 inherits it without introducing a new failure mode.
+
+### Evolution plan
+- If stuck `analyzing` rows appear in practice, add `analyzing_started_at: TIMESTAMPTZ` and a recovery task that resets rows older than N minutes back to `pending_analysis`.
+- If a future move to background tasks replaces this endpoint, the two-transaction pattern translates cleanly: the queue worker takes the place of the synchronous body.
