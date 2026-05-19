@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
+from app.database import get_db
+from app.models import Profile
 from app.schemas import (
     AnalyzeResponse,
     ProfileCreate,
@@ -13,63 +15,64 @@ from app.services import ai_analyzer
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
-# Temporary in-memory store — replaced by DB session in Phase 3
-profiles_db: dict[str, dict] = {}
-
-
 
 @router.post("", response_model=ProfileCreateResponse, status_code=201)
-def create_profile(data: ProfileCreate) -> ProfileCreateResponse:
-    profile_id = str(uuid4())
-    profiles_db[profile_id] = {
-        "id": profile_id,
-        "name": data.name,
-        "current_role": data.current_role,
-        "years_experience": data.years_experience,
-        "bio": data.bio,
-        "skills": data.skills,
-        "status": "pending_analysis",
-        "created_at": datetime.now(timezone.utc),
-        "analysis": None,
-        "recommendations": [],
-    }
-    return ProfileCreateResponse(
-        id=profile_id,
+def create_profile(data: ProfileCreate, db: Session = Depends(get_db)) -> ProfileCreateResponse:
+    profile = Profile(
         name=data.name,
+        current_role=data.current_role,
+        years_experience=data.years_experience,
+        bio=data.bio,
+        skills=data.skills,
         status="pending_analysis",
-        created_at=profiles_db[profile_id]["created_at"],
+    )
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return ProfileCreateResponse(
+        id=profile.id,
+        name=profile.name,
+        status=profile.status,
+        created_at=profile.created_at,
     )
 
 
 @router.post("/{profile_id}/analyze", response_model=AnalyzeResponse)
-def analyze_profile(profile_id: str) -> AnalyzeResponse:
-    if profile_id not in profiles_db:
+def analyze_profile(profile_id: UUID, db: Session = Depends(get_db)) -> AnalyzeResponse:
+    # Transaction A: flip status to "analyzing" and release the row before
+    # the long-running AI call. Holding a row lock across a 15-25s LLM round
+    # trip is the kind of habit you want to avoid even on a single-user MVP.
+    profile = db.get(Profile, profile_id)
+    if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    profile = profiles_db[profile_id]
-    profile["status"] = "analyzing"
-
     profile_input = ProfileCreate(
-        name=profile["name"],
-        current_role=profile["current_role"],
-        years_experience=profile["years_experience"],
-        bio=profile["bio"],
-        skills=profile["skills"],
+        name=profile.name,
+        current_role=profile.current_role,
+        years_experience=profile.years_experience,
+        bio=profile.bio,
+        skills=profile.skills,
     )
+    profile.status = "analyzing"
+    db.commit()
 
+    # No transaction is open here — the AI call runs while the row is unlocked.
     try:
         analysis, recommendations = ai_analyzer.analyze_profile(profile_input)
     except Exception as exc:
-        # Reset status so the client can retry. Surface a 500 with the cause.
-        profile["status"] = "pending_analysis"
+        # Transaction B (failure path): roll status back so the client can retry.
+        profile.status = "pending_analysis"
+        db.commit()
         raise HTTPException(
             status_code=500,
             detail=f"AI analysis failed: {exc}",
         ) from exc
 
-    profile["analysis"] = analysis
-    profile["recommendations"] = recommendations
-    profile["status"] = "completed"
+    # Transaction B (success path): persist results + mark completed.
+    profile.analysis = analysis.model_dump(mode="json")
+    profile.recommendations = [r.model_dump(mode="json") for r in recommendations]
+    profile.status = "completed"
+    db.commit()
 
     return AnalyzeResponse(
         status="completed",
@@ -78,29 +81,29 @@ def analyze_profile(profile_id: str) -> AnalyzeResponse:
 
 
 @router.get("/{profile_id}", response_model=ProfileResponse)
-def get_profile(profile_id: str) -> ProfileResponse:
-    if profile_id not in profiles_db:
+def get_profile(profile_id: UUID, db: Session = Depends(get_db)) -> ProfileResponse:
+    profile = db.get(Profile, profile_id)
+    if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
-
-    profile = profiles_db[profile_id]
     return ProfileResponse(
-        id=profile["id"],
-        name=profile["name"],
-        status=profile["status"],
-        analysis=profile["analysis"],
-        recommendations=profile["recommendations"],
+        id=profile.id,
+        name=profile.name,
+        status=profile.status,
+        analysis=profile.analysis,
+        recommendations=profile.recommendations,
     )
 
 
 @router.get("", response_model=list[ProfileResponse])
-def list_profiles() -> list[ProfileResponse]:
+def list_profiles(db: Session = Depends(get_db)) -> list[ProfileResponse]:
+    profiles = db.query(Profile).all()
     return [
         ProfileResponse(
-            id=p["id"],
-            name=p["name"],
-            status=p["status"],
-            analysis=p["analysis"],
-            recommendations=p["recommendations"],
+            id=p.id,
+            name=p.name,
+            status=p.status,
+            analysis=p.analysis,
+            recommendations=p.recommendations,
         )
-        for p in profiles_db.values()
+        for p in profiles
     ]
