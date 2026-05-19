@@ -225,3 +225,24 @@ Splitting into two transactions:
 ### Evolution plan
 - If stuck `analyzing` rows appear in practice, add `analyzing_started_at: TIMESTAMPTZ` and a recovery task that resets rows older than N minutes back to `pending_analysis`.
 - If a future move to background tasks replaces this endpoint, the two-transaction pattern translates cleanly: the queue worker takes the place of the synchronous body.
+
+---
+
+## Decision: SAVEPOINT-based test isolation around the two-transaction analyze endpoint
+
+### Chosen option
+`backend/tests/conftest.py:db_session` wraps each test in an outer transaction on a single connection and opens a SAVEPOINT inside it. An `after_transaction_end` event listener re-opens the SAVEPOINT every time the application calls `session.commit()`. At teardown the outer transaction is rolled back, discarding everything — including state the app "committed" mid-test.
+
+### Justification
+The analyze endpoint commits twice by design (see the two-transaction ADR above). A naive per-test rollback fixture cannot undo those commits, so state would leak between tests. Per-test truncation works but adds full-table churn and obscures the contract. The SAVEPOINT pattern is the SQLAlchemy-documented technique for joining a session into an external transaction: production code stays unchanged, tests stay hermetic, the suite stays fast.
+
+### Accepted trade-offs
+- The listener uses `transaction._parent.nested` (a private attribute) per the official SQLAlchemy 2.0 docs. Could break in a future major release.
+- All tests share a single connection, so concurrency tests would need a different fixture.
+
+### Mitigations
+- `sqlalchemy==2.0.49` is pinned. If `_parent` ever changes, the fixture is the only place to update.
+- The MVP has no concurrent-write tests; this pattern matches the actual load.
+
+### Evolution plan
+- If tests of background tasks or worker concurrency appear, add a second fixture variant that uses truncation rather than savepoints.
