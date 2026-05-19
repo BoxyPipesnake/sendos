@@ -78,6 +78,18 @@ The three pipeline steps use three different personas, even though steps 1 and 2
 
 **Observable effect in testing.** When the analyzer ran on a real profile, the career-paths output explicitly referenced things like "Alex's combination of backend + ML" and produced specific named paths ("ML Platform Engineer," "Senior Platform / Infrastructure Engineer") with reasoned justifications. That's the kind of output that comes from a "strategist" framing — generic personas tend to produce more boilerplate.
 
+### Example 4: Mocking the LLM at the application boundary for tests
+
+The Phase 4 integration tests do not call Anthropic. The `mock_ai_analyzer` fixture in `backend/tests/conftest.py` monkey-patches `app.routers.profiles.ai_analyzer.analyze_profile` with a function that returns a canned `(Analysis, list[Recommendation])` pair — the same Pydantic types the real analyzer returns.
+
+**Why this worked.** Three things would otherwise have broken the test suite:
+
+- **Cost.** Real analyze calls cost money. A 6-test suite firing analyze on every CI run would charge real dollars per run.
+- **Speed.** A real analyze call takes 15-25 seconds. The whole 6-test suite would take 90+ seconds; the feedback loop would die. With the mock the suite runs in ~1.6 seconds.
+- **Determinism.** LLM outputs vary. Tests that assert on specific skill names would flake.
+
+The mock replaces the AI at the **router's view of the analyzer** — not deeper. Everything else (Pydantic validation, SQLAlchemy session, JSONB serialization, the status lifecycle, the two-transaction analyze pattern) runs under real test. The integration tests verify *given an Analysis and Recommendations, the endpoint correctly persists and returns them*. The quality of the AI output is a separate concern, evaluated manually during Phase 3 verification.
+
 ---
 
 ## Prompt Iteration
