@@ -88,6 +88,9 @@ def get_profile(profile_id: UUID, db: Session = Depends(get_db)) -> ProfileRespo
     return ProfileResponse(
         id=profile.id,
         name=profile.name,
+        current_role=profile.current_role,
+        years_experience=profile.years_experience,
+        bio=profile.bio,
         status=profile.status,
         analysis=profile.analysis,
         recommendations=profile.recommendations,
@@ -101,6 +104,9 @@ def list_profiles(db: Session = Depends(get_db)) -> list[ProfileResponse]:
         ProfileResponse(
             id=p.id,
             name=p.name,
+            current_role=p.current_role,
+            years_experience=p.years_experience,
+            bio=p.bio,
             status=p.status,
             analysis=p.analysis,
             recommendations=p.recommendations,

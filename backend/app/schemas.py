@@ -55,6 +55,9 @@ class ProfileResponse(BaseModel):
     """Full profile response returned by GET endpoints."""
     id: UUID
     name: str
+    current_role: str
+    years_experience: int
+    bio: str
     status: str
     analysis: Analysis | None = None
     recommendations: list[Recommendation] = []
