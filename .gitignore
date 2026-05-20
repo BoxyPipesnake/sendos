@@ -20,7 +20,7 @@ ENV/
 .mcp.json
 
 # Claude Code per-developer local state
-.claude/settings.local.json
+**/.claude/settings.local.json
 
 # Distribution / packaging
 build/
@@ -48,6 +48,9 @@ Thumbs.db
 node_modules/
 dist/
 .vite/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # Logs
 *.log
