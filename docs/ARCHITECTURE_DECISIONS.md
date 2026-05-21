@@ -318,3 +318,25 @@ The browser same-origin policy is the only thing stopping arbitrary websites fro
 
 ### Evolution plan
 - If/when the backend gains authenticated endpoints, set `allow_credentials=True` and tighten further — `["*"]` is incompatible with credentialed CORS, so the current shape already points in the right direction.
+
+---
+
+## Data Model
+
+Single table — all AI output lives in JSONB columns on the same row (see the JSONB ADR above).
+
+```mermaid
+erDiagram
+    profiles {
+        uuid id PK "default uuid4()"
+        string name "NOT NULL"
+        string current_role "NOT NULL"
+        integer years_experience "NOT NULL"
+        string bio "NOT NULL"
+        jsonb skills "NOT NULL, default []"
+        string status "NOT NULL (pending_analysis | analyzing | completed)"
+        timestamptz created_at "NOT NULL, default now()"
+        jsonb analysis "NULLABLE"
+        jsonb recommendations "NOT NULL, default []"
+    }
+```
