@@ -10,9 +10,9 @@ This document records the meaningful technical decisions taken while building th
 Persist profiles in a module-level `dict[str, dict]` keyed by string UUID in `backend/app/routers/profiles.py`. Replace with SQLAlchemy + PostgreSQL in Phase 3 without changing any endpoint signatures or response shapes.
 
 ### Justification
-The 4-endpoint contract is the hard requirement of the project. Storage is an implementation detail behind those endpoints. By starting with a dictionary, Phase 1 could focus exclusively on getting the API surface right (request validation, response shapes, status flow, error handling) without spending time on database modeling, connection pooling, migrations, or local DB setup.
+The 4-endpoint contract is the hard requirement; storage is an implementation detail behind it. Starting with a dict let Phase 1 focus on the API surface (validation, response shapes, status flow, error handling) without database modeling, pooling, migrations, or local DB setup.
 
-When Phase 3 swaps in PostgreSQL, the endpoints will not change — only the lines inside each endpoint that read from / write to the store. The Pydantic schemas in `backend/app/schemas.py` are already the source of truth for the request and response shapes; the storage layer just has to produce objects that conform to them.
+When Phase 3 swaps in PostgreSQL, endpoint signatures don't change — only the read/write lines inside each one. The Pydantic schemas in `backend/app/schemas.py` are already the source of truth; the storage layer just has to produce objects that conform.
 
 ### Accepted trade-offs
 - All data is lost on every server restart. There is no persistence at all in Phase 1 or 2.
@@ -35,9 +35,9 @@ When Phase 3 swaps in PostgreSQL, the endpoints will not change — only the lin
 The `POST /api/profiles/{id}/analyze` endpoint runs the three LLM calls inline and only returns to the client once analysis is complete (or has failed). Status is mutated on the stored profile during execution so that a parallel `GET` request can observe `pending_analysis → analyzing → completed` (or `pending_analysis` again on failure).
 
 ### Justification
-The project brief explicitly excluded queues, workers, and background processing. Beyond compliance with the brief, a synchronous design is also the simplest possible implementation that meets the requirement: no broker to run, no consumer process to keep alive, no state machine to reconcile, no distributed-tracing problem.
+The project brief excluded queues, workers, and background processing. Beyond compliance, synchronous is the simplest design that meets the requirement: no broker, no consumer process, no state machine to reconcile, no distributed-tracing problem.
 
-For an MVP with one user at a time, the cost of a 10-25 second blocking HTTP call is acceptable. The status flow even gives a frontend a way to display progress feedback by polling `GET /api/profiles/{id}` during execution.
+For an MVP with one user at a time, a 10-25 second blocking call is acceptable. The status flow also gives a frontend a way to show progress by polling `GET /api/profiles/{id}` during execution.
 
 ### Accepted trade-offs
 - The HTTP request blocks for the full duration of the LLM pipeline (~10-25 seconds in practice). Browsers, proxies, and load balancers often time out around 30-60 seconds, so this design will not scale to slower model combinations or longer chains.
@@ -67,12 +67,12 @@ Profile analysis is split into three sequential LLM calls in `backend/app/servic
 Each step has its own focused prompt and its own Pydantic output schema. The output of each step is interpolated into the next step's prompt as plain text (the chain link).
 
 ### Justification
-A single prompt asking the model to "look at this profile and produce skills, interests, and three career paths with development steps" forces the model to do three different cognitive tasks in one shot:
+A single prompt asking for skills + interests + career paths forces three different cognitive tasks in one shot:
 - Mechanical extraction (skills)
 - Inference (interests)
 - Strategic synthesis (career paths)
 
-These have different reasoning patterns and benefit from different output schemas. Splitting them produces tighter prompts, smaller schemas per call (less room for the model to drift), and isolates where things go wrong if a result looks off. It also makes each step's output independently inspectable, which mattered during development and would matter again for future evaluation work.
+These have different reasoning patterns and benefit from different schemas. Splitting produces tighter prompts, smaller per-call schemas (less drift room), and isolates failures when a result looks off. Each step's output stays independently inspectable, which mattered during development and would again for evaluation work.
 
 ### Accepted trade-offs
 - Three API calls instead of one. Total latency is the sum of the three (~10-25 seconds).
@@ -99,12 +99,12 @@ These have different reasoning patterns and benefit from different output schema
 Both `ChatAnthropic` instances are created once at module load with tuned `temperature` and `max_tokens`.
 
 ### Justification
-The three steps have different cognitive demands and therefore different cost-effective price points:
+The three steps have different cognitive demands and different cost-effective price points:
 
-- **Extraction and inference** are mechanical: read the bio, list skills, infer broad interest areas. Haiku is genuinely sufficient for this kind of work and is much faster and cheaper per call.
-- **Career path generation** is strategic synthesis: balance skill strengths, interests, and realistic time horizons to propose ranked multi-month plans with development steps. Sonnet's stronger reasoning pays off here and the difference is visible in the output quality (specific, well-justified recommendations rather than generic ones).
+- **Extraction and inference** are mechanical — read the bio, list skills, infer interest areas. Haiku is sufficient here and much faster/cheaper per call.
+- **Career path generation** is strategic synthesis — balance skills, interests, and time horizons into ranked multi-month plans. Sonnet's stronger reasoning shows in the output (specific, well-justified recommendations rather than generic ones).
 
-A single-model alternative would either pay Sonnet rates on the mechanical steps (~10× the cost for negligible quality gain) or accept Haiku-quality strategic recommendations (visibly more generic in practice).
+A single-model alternative either pays Sonnet rates on the mechanical steps (~10× cost for negligible gain) or accepts Haiku-quality strategic recommendations (visibly more generic in practice).
 
 ### Accepted trade-offs
 - The codebase has to manage two model instances and pick which one each step uses. This is a small extra surface compared to a single instance.
@@ -128,9 +128,9 @@ Each LLM call uses `model.with_structured_output(SchemaClass, method="json_schem
 Field descriptions on the schemas (`Field(description="...")`) are shipped to the model as part of the schema and act as inline instructions for what each field should contain.
 
 ### Justification
-Without structured output, the alternative is to ask the model to "return JSON in this shape" in the prompt, receive text back, parse it with `json.loads`, validate it manually, and handle every malformed-response failure mode. That's a known-bug-producing pattern: missing fields, wrong types, extra prose around the JSON, trailing commas, hallucinated keys.
+The alternative is asking the model to "return JSON in this shape," parsing with `json.loads`, validating manually, and handling every malformed-response failure mode (missing fields, wrong types, extra prose, trailing commas, hallucinated keys). A known-bug-producing pattern.
 
-The structured-output path eliminates all of those failure modes at the protocol level. The model is constrained at generation time to produce valid JSON matching the schema; LangChain parses it for us; we get a typed Python object out the other side. The Pydantic schemas defined in `app/schemas.py` already describe the API response shapes — reusing them as LLM output contracts means the analyzer can produce objects that flow straight to the response with no shape adaptation.
+Structured output eliminates those failure modes at the protocol level — the model is constrained at generation time, LangChain parses, we get a typed Python object out. The Pydantic schemas in `app/schemas.py` already describe the API response shapes; reusing them as LLM output contracts means analyzer outputs flow straight to the response with no shape adaptation.
 
 ### Accepted trade-offs
 - The model is constrained to the exact schema shape — if we ever want it to add a justification it can't fit into a field, we'd have to extend the schema first.
@@ -152,9 +152,9 @@ The structured-output path eliminates all of those failure modes at the protocol
 Store `Analysis` and `list[Recommendation]` as JSONB columns directly on the `profiles` row in `backend/app/models.py`. No `analyses`, `recommendations`, or `recommendation_steps` tables exist. Pydantic models serialize to JSONB via `model_dump(mode="json")` on write and deserialize back through Pydantic validation on read.
 
 ### Justification
-The analysis and recommendation structures are nested data we never query *inside*. No MVP endpoint or planned use case filters profiles by detected skill, joins on a recommendation step, or aggregates duration across profiles. They are read back whole and returned through the API whole.
+Analysis and recommendation structures are nested data we never query *inside*. No MVP endpoint filters profiles by detected skill, joins on a recommendation step, or aggregates duration. They're read whole and returned whole.
 
-Normalizing across four tables (`profiles`, `analyses`, `recommendations`, `recommendation_steps`) for data we never query would buy us nothing and cost us four table definitions, three foreign keys, cascade behavior, joins on every read, and migrations every time the AI output shape changes.
+Normalizing across four tables (`profiles`, `analyses`, `recommendations`, `recommendation_steps`) for data we never query buys nothing and costs four table definitions, three FKs, cascade behavior, joins on every read, and migrations every time the AI output shape changes.
 
 ### Accepted trade-offs
 - Cannot run plain SQL queries on the contents (`WHERE detected_skill = 'Python'` requires JSONB operators).
@@ -175,9 +175,9 @@ Normalizing across four tables (`profiles`, `analyses`, `recommendations`, `reco
 At app startup (inside a FastAPI `lifespan` context manager in `backend/app/main.py`) call `Base.metadata.create_all(bind=engine)` to create any missing tables. No Alembic, no migration scripts, no `alembic.ini`.
 
 ### Justification
-Alembic earns its keep when a schema evolves across multiple deployed environments — generating versioned revisions, applying them in order, supporting rollback. For an MVP with one developer, one local database, and a schema that is unlikely to change before Phase 4 (tests), Alembic is overhead that produces no value yet.
+Alembic earns its keep when a schema evolves across multiple deployed environments — versioned revisions, ordered application, rollback. For an MVP with one developer, one local DB, and a schema unlikely to change before Phase 4, Alembic is overhead with no value yet.
 
-`create_all()` is idempotent: it issues `CREATE TABLE IF NOT EXISTS` for each model registered on `Base.metadata`. On every uvicorn boot, missing tables are created and existing tables are left alone.
+`create_all()` is idempotent: `CREATE TABLE IF NOT EXISTS` for each model on `Base.metadata`. On every uvicorn boot, missing tables are created, existing ones left alone.
 
 ### Accepted trade-offs
 - Column type changes after data exists require manual intervention. `create_all()` will not modify an existing table.
@@ -198,7 +198,7 @@ Alembic earns its keep when a schema evolves across multiple deployed environmen
 In `backend/app/routers/profiles.py:analyze_profile`, commit `status="analyzing"` to the database *before* invoking `ai_analyzer.analyze_profile()`. Run the (~15-25 second) LLM pipeline with no transaction open. Then commit `status="completed"` plus the analysis and recommendations as JSONB. On exception, commit `status="pending_analysis"` as the rollback path.
 
 ### Justification
-The naive port from the Phase 1 dict version would wrap the LLM call inside a single open transaction:
+The naive port from the Phase 1 dict would wrap the LLM call in a single open transaction:
 
 ```python
 profile.status = "analyzing"
@@ -207,11 +207,11 @@ profile.analysis = ...
 db.commit()
 ```
 
-This holds a row lock for the full duration of the AI call and never makes the `analyzing` state observable from other sessions — the state is only written when the surrounding transaction commits, by which point status is already `completed`.
+This holds a row lock for the full AI call and never makes `analyzing` observable from other sessions — the state is only written when the surrounding transaction commits, by which point status is already `completed`.
 
 Splitting into two transactions:
-1. Releases the row lock immediately after marking it `analyzing`, so concurrent reads can see the in-progress state.
-2. Keeps the connection idle (transaction-wise) during the long LLM round trip rather than holding an open write transaction across slow I/O.
+1. Releases the row lock immediately after marking `analyzing`, so concurrent reads see the in-progress state.
+2. Keeps the connection transaction-idle during the long LLM round trip rather than holding an open write across slow I/O.
 3. Builds the right habit for a multi-user future even though the MVP is single-user.
 
 ### Accepted trade-offs
@@ -234,7 +234,7 @@ Splitting into two transactions:
 `backend/tests/conftest.py:db_session` wraps each test in an outer transaction on a single connection and opens a SAVEPOINT inside it. An `after_transaction_end` event listener re-opens the SAVEPOINT every time the application calls `session.commit()`. At teardown the outer transaction is rolled back, discarding everything — including state the app "committed" mid-test.
 
 ### Justification
-The analyze endpoint commits twice by design (see the two-transaction ADR above). A naive per-test rollback fixture cannot undo those commits, so state would leak between tests. Per-test truncation works but adds full-table churn and obscures the contract. The SAVEPOINT pattern is the SQLAlchemy-documented technique for joining a session into an external transaction: production code stays unchanged, tests stay hermetic, the suite stays fast.
+The analyze endpoint commits twice by design (see the two-transaction ADR above), so a naive per-test rollback fixture can't undo them and state leaks between tests. Per-test truncation works but adds full-table churn and obscures the contract. The SAVEPOINT pattern is the SQLAlchemy-documented technique for joining a session into an external transaction — production code stays unchanged, tests stay hermetic, the suite stays fast.
 
 ### Accepted trade-offs
 - The listener uses `transaction._parent.nested` (a private attribute) per the official SQLAlchemy 2.0 docs. Could break in a future major release.
@@ -246,3 +246,75 @@ The analyze endpoint commits twice by design (see the two-transaction ADR above)
 
 ### Evolution plan
 - If tests of background tasks or worker concurrency appear, add a second fixture variant that uses truncation rather than savepoints.
+
+---
+
+## Decision: Vanilla React frontend — no state library, no React Query, polling instead of websockets
+
+### Chosen option
+Two pages (`/` create + recent list, `/profiles/:id` details + analyze) built on React 19 + Vite 6 + TypeScript, Tailwind v4 via `@tailwindcss/vite`, and react-router-dom 6. State is local `useState`; data fetching is `fetch` wrapped in `src/api/client.ts`. The details page polls `GET /api/profiles/{id}` every 3 seconds while status is `analyzing`, clearing the interval in the effect cleanup.
+
+### Justification
+The 4-endpoint contract has no shared cross-page state and no real-time push requirement, so Redux/Zustand and React Query buy nothing here. Polling is a few lines and matches the synchronous backend pipeline — adding websockets for one in-flight request would mean a second protocol and reconnection logic the brief doesn't need.
+
+### Accepted trade-offs
+- Each polling tick is a full request — wasteful compared to a single push.
+- No client-side cache means navigating back to a profile refetches it.
+- The hand-rolled fetch wrapper duplicates work React Query gives for free.
+
+### Mitigations
+- Polling stops as soon as status leaves `analyzing` (typically 10–25 seconds), so the wasted-tick window is bounded.
+- `src/api/client.ts` centralizes status-code → user-message mapping in one place, keeping the boilerplate small.
+
+### Evolution plan
+- If a third page needs shared profile data, add React Query and lift polling into a query with `refetchInterval`. The isolated API client makes it a one-file change.
+- If real-time updates become a requirement, replace polling with an SSE endpoint — `EventSource` drops in where `setInterval` lives.
+
+---
+
+## Decision: Three-provider deployment (Vercel + Render + Supabase) with Docker for local demo only
+
+### Chosen option
+Phase 6 added the Dockerfiles; Phase 7 wired the running stack across three managed providers:
+
+- **Frontend → Vercel** (runs `npm run build` natively; `frontend/Dockerfile` exists but is consumed only by docker-compose, not by Vercel).
+- **Backend → Render** via `backend/Dockerfile`.
+- **Postgres → Supabase** (managed, referenced from Render via `DATABASE_URL`).
+- **`docker-compose.yml`** exists only as a local-demo orchestrator (postgres + backend + frontend). It is not consumed by any of the three hosts.
+
+### Justification
+Each provider was picked for what it does best for free: Vercel for Vite/preview deploys, Render for a long-running Docker container, Supabase for managed Postgres with a usable dashboard. A single-platform alternative (everything on Render) would have meant a worse frontend deploy story or no managed-Postgres UI. The backend Docker image is the same one `docker-compose` runs locally, so the same artifact works in both contexts.
+
+### Accepted trade-offs
+- Three vendor relationships and three dashboards instead of one.
+- Frontend and backend live on different origins, so CORS becomes a real concern (see next ADR) — a same-origin deploy would have avoided it.
+- The frontend has to learn the backend URL via `VITE_API_URL`, which means an extra env-var step in the Vercel dashboard.
+
+### Mitigations
+- All three platforms cover MVP load on their free tiers.
+- `docker-compose.yml` provides a one-command local equivalent so a reviewer can run the full stack offline without touching any of the three providers.
+- `VITE_API_URL` defaults to `http://localhost:8000` so local dev is unchanged.
+
+### Evolution plan
+- If usage justifies a paid tier, consolidating onto one platform (e.g., Render for backend + DB + static frontend) is a straightforward migration — only env vars and CORS would change.
+
+---
+
+## Decision: CORS allowlist instead of `allow_origins=["*"]`
+
+### Chosen option
+Once Phase 7 split the frontend and backend onto separate origins, `backend/app/main.py` configures `CORSMiddleware` with an explicit list: the production Vercel origin plus the two local dev ports. No wildcard.
+
+### Justification
+The browser same-origin policy is the only thing stopping arbitrary websites from running JS that hits the backend on behalf of a visitor's session. `allow_origins=["*"]` removes that protection for the demo's narrow convenience. The allowlist is one line longer and forces an intentional decision every time a new origin needs access — the right default even though this MVP has no auth tokens yet.
+
+### Accepted trade-offs
+- Vercel preview deployments (PR-style subdomains) are *not* on the list and therefore can't reach the backend until added.
+- Adding a new frontend origin requires a code change + redeploy of the backend.
+
+### Mitigations
+- The allowlist lives in one place and is easy to extend.
+- If preview-deploy access becomes a real need, `allow_origin_regex` accepts a pattern (e.g. `sendos-.*\.vercel\.app`) without giving up wildcard safety.
+
+### Evolution plan
+- If/when the backend gains authenticated endpoints, set `allow_credentials=True` and tighten further — `["*"]` is incompatible with credentialed CORS, so the current shape already points in the right direction.
