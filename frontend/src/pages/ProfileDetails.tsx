@@ -3,11 +3,24 @@ import { useParams, Link } from "react-router-dom";
 import { analyzeProfile, getProfile } from "../api/client";
 import type { ProfileResponse, ProfileStatus } from "../api/types";
 
-const statusColors: Record<ProfileStatus, string> = {
-  pending_analysis: "bg-yellow-100 text-yellow-800",
-  analyzing: "bg-blue-100 text-blue-800",
-  completed: "bg-green-100 text-green-800",
+const statusStyles: Record<ProfileStatus, string> = {
+  pending_analysis: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
+  analyzing: "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200",
+  completed: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
 };
+
+const skillLevelStyles: Record<string, string> = {
+  beginner: "bg-slate-50 text-slate-700 ring-slate-200",
+  intermediate: "bg-sky-50 text-sky-700 ring-sky-200",
+  advanced: "bg-violet-50 text-violet-700 ring-violet-200",
+  expert: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+};
+
+const defaultSkillStyle = "bg-zinc-50 text-zinc-700 ring-zinc-200";
+
+function skillBadgeClass(level: string): string {
+  return skillLevelStyles[level.toLowerCase()] ?? defaultSkillStyle;
+}
 
 export default function ProfileDetails() {
   const { id } = useParams<{ id: string }>();
@@ -61,15 +74,24 @@ export default function ProfileDetails() {
     }
   }
 
-  if (loading) return <p className="p-8 text-gray-600">Loading…</p>;
+  if (loading) {
+    return (
+      <div className="max-w-3xl mx-auto px-6 py-10">
+        <p className="text-sm text-zinc-500">Loading…</p>
+      </div>
+    );
+  }
 
   if (error && !profile) {
     return (
-      <div className="max-w-2xl mx-auto p-8">
-        <Link to="/" className="text-blue-600 hover:underline">
+      <div className="max-w-3xl mx-auto px-6 py-10">
+        <Link
+          to="/"
+          className="inline-flex items-center text-sm text-brand-600 hover:text-brand-700"
+        >
           &larr; Back
         </Link>
-        <div className="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded mt-4">
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {error}
         </div>
       </div>
@@ -79,116 +101,173 @@ export default function ProfileDetails() {
   if (!profile) return null;
 
   return (
-    <div className="max-w-3xl mx-auto p-8">
-      <Link to="/" className="text-blue-600 hover:underline">
+    <div className="max-w-3xl mx-auto px-6 py-10 sm:py-12">
+      <Link
+        to="/"
+        className="inline-flex items-center text-sm text-brand-600 hover:text-brand-700"
+      >
         &larr; Back
       </Link>
 
-      <div className="mt-4 bg-white p-6 rounded shadow">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-3xl font-bold">{profile.name}</h1>
+      <section className="mt-4 rounded-2xl border border-zinc-200 bg-white p-6 sm:p-7 shadow-sm">
+        <div className="flex items-start justify-between gap-4 mb-5">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+              {profile.name}
+            </h1>
+            <p className="mt-1 text-sm text-zinc-600">{profile.current_role}</p>
+          </div>
           <span
-            className={`text-sm font-medium px-3 py-1 rounded ${statusColors[profile.status]}`}
+            className={`text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap ${statusStyles[profile.status]}`}
           >
             {profile.status}
           </span>
         </div>
-        <dl className="space-y-2 text-sm">
+
+        <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-t border-zinc-100 pt-5">
           <div>
-            <dt className="inline font-medium">Role:</dt>{" "}
-            <dd className="inline">{profile.current_role}</dd>
+            <dt className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Role
+            </dt>
+            <dd className="mt-1 text-sm text-zinc-900">{profile.current_role}</dd>
           </div>
           <div>
-            <dt className="inline font-medium">Years of experience:</dt>{" "}
-            <dd className="inline">{profile.years_experience}</dd>
+            <dt className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Years of experience
+            </dt>
+            <dd className="mt-1 text-sm text-zinc-900">{profile.years_experience}</dd>
           </div>
-          <div>
-            <dt className="font-medium">Bio:</dt>
-            <dd className="text-gray-700">{profile.bio}</dd>
+          <div className="sm:col-span-3">
+            <dt className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Bio
+            </dt>
+            <dd className="mt-1 text-sm text-zinc-700 leading-relaxed">
+              {profile.bio}
+            </dd>
           </div>
         </dl>
 
         {profile.status === "pending_analysis" && (
-          <button
-            onClick={handleAnalyze}
-            disabled={analyzing}
-            className="mt-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium px-4 py-2 rounded"
-          >
-            {analyzing ? "Starting…" : "Analyze with AI"}
-          </button>
+          <div className="mt-6 pt-5 border-t border-zinc-100">
+            <button
+              onClick={handleAnalyze}
+              disabled={analyzing}
+              className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-500 disabled:shadow-none"
+            >
+              {analyzing ? "Starting…" : "Analyze with AI"}
+            </button>
+          </div>
         )}
 
         {profile.status === "analyzing" && (
-          <p className="mt-4 text-blue-700">Analyzing… (may take 15-30 seconds)</p>
+          <div className="mt-6 pt-5 border-t border-zinc-100">
+            <div className="inline-flex items-center gap-2.5 text-sm text-brand-700">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-brand-500 opacity-75 animate-ping"></span>
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-600"></span>
+              </span>
+              Analyzing… (may take 15-30 seconds)
+            </div>
+          </div>
         )}
-      </div>
+      </section>
 
       {error && profile && (
-        <div className="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded mt-4">
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {error}
         </div>
       )}
 
       {profile.status === "completed" && profile.analysis && (
         <>
-          <section className="mt-6 bg-white p-6 rounded shadow">
-            <h2 className="text-xl font-semibold mb-3">Detected skills</h2>
+          <section className="mt-6 rounded-2xl border border-zinc-200 bg-white p-6 sm:p-7 shadow-sm">
+            <h2 className="text-base font-semibold tracking-tight text-zinc-900 mb-4">
+              Detected skills
+            </h2>
             <div className="flex flex-wrap gap-2">
               {profile.analysis.detected_skills.map((s) => (
                 <span
                   key={s.name}
-                  className="bg-blue-50 text-blue-700 text-sm px-3 py-1 rounded border border-blue-200"
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset ${skillBadgeClass(s.level)}`}
                 >
-                  {s.name}{" "}
-                  <span className="text-xs text-blue-500">({s.level})</span>
+                  {s.name}
+                  <span className="opacity-60 font-normal">·</span>
+                  <span className="opacity-80 font-normal">{s.level}</span>
                 </span>
               ))}
             </div>
           </section>
 
-          <section className="mt-6 bg-white p-6 rounded shadow">
-            <h2 className="text-xl font-semibold mb-3">Interests</h2>
-            <ul className="list-disc list-inside text-gray-700">
+          <section className="mt-6 rounded-2xl border border-zinc-200 bg-white p-6 sm:p-7 shadow-sm">
+            <h2 className="text-base font-semibold tracking-tight text-zinc-900 mb-3">
+              Interests
+            </h2>
+            <ul className="space-y-1.5">
               {profile.analysis.interests.map((interest) => (
-                <li key={interest}>{interest}</li>
+                <li
+                  key={interest}
+                  className="flex items-center gap-2.5 text-sm text-zinc-700"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-brand-500"></span>
+                  {interest}
+                </li>
               ))}
             </ul>
           </section>
 
-          <section className="mt-6">
-            <h2 className="text-xl font-semibold mb-3">
+          <section className="mt-8">
+            <h2 className="text-lg font-semibold tracking-tight text-zinc-900 mb-4">
               Career path recommendations
             </h2>
             <div className="space-y-4">
               {profile.recommendations.map((rec) => (
-                <div key={rec.title} className="bg-white p-6 rounded shadow">
-                  <h3 className="text-lg font-bold">{rec.title}</h3>
-                  <p className="text-sm text-gray-500 mb-2">
-                    ~{rec.duration_months} months
+                <article
+                  key={rec.title}
+                  className="rounded-2xl border border-zinc-200 bg-white p-6 sm:p-7 shadow-sm"
+                >
+                  <header className="flex items-start justify-between gap-4 mb-3">
+                    <h3 className="text-lg font-semibold text-zinc-900">
+                      {rec.title}
+                    </h3>
+                    <span className="shrink-0 inline-flex items-center rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-200">
+                      ~{rec.duration_months} months
+                    </span>
+                  </header>
+                  <p className="text-sm text-zinc-700 leading-relaxed mb-5">
+                    {rec.description}
                   </p>
-                  <p className="text-gray-700 mb-4">{rec.description}</p>
-                  <ol className="space-y-3 list-decimal list-inside">
-                    {rec.steps.map((step) => (
-                      <li key={step.title}>
-                        <span className="font-medium">{step.title}</span>
-                        <span className="text-sm text-gray-500">
-                          {" "}
-                          ({step.duration_weeks} weeks)
-                        </span>
-                        <div className="ml-6 flex flex-wrap gap-1 mt-1">
-                          {step.skills_to_develop.map((skill) => (
-                            <span
-                              key={skill}
-                              className="bg-gray-100 text-gray-700 text-xs px-2 py-1 rounded"
-                            >
-                              {skill}
+                  <ol className="space-y-4">
+                    {rec.steps.map((step, i) => (
+                      <li key={step.title} className="flex gap-3.5">
+                        <div className="shrink-0 h-6 w-6 rounded-full bg-brand-600 text-white text-xs font-semibold flex items-center justify-center">
+                          {i + 1}
+                        </div>
+                        <div className="flex-1 pt-0.5">
+                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                            <span className="text-sm font-medium text-zinc-900">
+                              {step.title}
                             </span>
-                          ))}
+                            <span className="text-xs text-zinc-500">
+                              {step.duration_weeks} weeks
+                            </span>
+                          </div>
+                          {step.skills_to_develop.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {step.skills_to_develop.map((skill) => (
+                                <span
+                                  key={skill}
+                                  className="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700"
+                                >
+                                  {skill}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </li>
                     ))}
                   </ol>
-                </div>
+                </article>
               ))}
             </div>
           </section>
